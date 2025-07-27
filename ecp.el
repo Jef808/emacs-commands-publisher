@@ -1,4 +1,4 @@
-;;; ecp.el --- Extract context events from emacs -*- lexical-binding: t; -*-
+;;; ecp.el --- Publish interactive commands with context -*- lexical-binding: t; -*-
 ;;
 ;; Copyright (C) 2025 Jean-François Arbour
 ;;
@@ -15,7 +15,7 @@
 ;;
 ;;; Commentary:
 ;;
-;;  Extract context events from emacs
+;;  Publish interactive commands with context
 ;;
 ;;; Code:
 
@@ -60,6 +60,9 @@ If nil, publishing is disabled."
 (defvar ecp--session-id nil
   "Unique session identifier for this Emacs instance.")
 
+(defvar ecp--last-context nil
+  "Last recorded context state.")
+
 (defun ecp--generate-session-id ()
   "Generate a unique session identifier."
   (format "%s-%d-%d"
@@ -71,22 +74,29 @@ If nil, publishing is disabled."
   "Return non-nil if COMMAND should be published."
   (and ecp--enabled
        ecp-publish-url
-       (not (memq command ecp-excluded-commands))))
+       (not (memq command ecp-excluded-commands))
+       (ecp--context-changed-p)))
 
-(defun ecp--collect-buffer-info ()
-  "Collect current buffer information."
-  (list :buffer-name (buffer-name)
-        :buffer-file-name (buffer-file-name)
-        :major-mode major-mode))
+(defun ecp--get-current-context ()
+  "Get current meaningful context."
+  (list :buffer (buffer-name)
+        :file_name (buffer-file-name)
+        :major_mode major-mode
+        :project (when-let ((proj (project-current)))
+                   (project-name proj))))
+
+(defun ecp--context-changed-p ()
+  "Retur non-nil if context has meaningfully changed."
+  (let ((current (ecp--get-current-context)))
+    (prog1 (not (equal current ecp--last-context))
+      (setq ecp--last-context current))))
 
 (defun ecp--create-event-payload (command)
   "Create event payload for COMMAND."
   (let ((base-payload (list :timestamp (format-time-string "%Y-%m-%dT%H:%M:%S.%3NZ" nil t)
-                            :session-id ecp--session-id
+                            :session_id ecp--session-id
                             :command (symbol-name command)
-                            :buffer-info (ecp--collect-buffer-info)
-                            :project (if-let ((current (project-current)))
-                                       (project-name current)))))
+                            :context ecp--last-context)))
     base-payload))
 
 (defun ecp--publish-event-async (payload)
@@ -96,17 +106,15 @@ If nil, publishing is disabled."
         (url-request-data (encode-coding-string (json-encode payload) 'utf-8)))
     (url-retrieve ecp-publish-url
                   (lambda (status)
-                    (when (plist-get status :error)
-                      (message "ECP: Failed to publish event: %s"
-                               (plist-get status :error))))
+                    (when-let ((error (plist-get status :error)))
+                      (message "ECP: Failed to publish event: %s" error)))
                   nil
-                  nil
-                  ecp-publish-timeout)))
+                  'silent)))
 
 (defun ecp--command-hook ()
   "Hook function to capture and publish interactive commands."
   (when (and (ecp--should-publish-command-p this-command)
-             (called-interactively-p 'interactive))
+             (not (or executing-kbd-macro noninteractive)))
     (let ((payload (ecp--create-event-payload this-command)))
       (ecp--publish-event-async payload))))
 

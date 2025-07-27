@@ -2,11 +2,8 @@
 Extract and publish interactive command events from Emacs to external
 services for context tracking and analysis.
 
-
-
 ## Features
-- Captures interactive commands with context (buffer, project,
-  timestamp)
+- Captures interactive commands that modify context (buffer, buffer-file-name, project, major-mode)
 - Asynchronous HTTP publishing to configurable endpoints
 - Session tracking with unique identifiers
 - Configurable command exclusion list

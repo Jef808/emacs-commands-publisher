@@ -1,0 +1,156 @@
+;;; ecp.el --- Extract context events from emacs -*- lexical-binding: t; -*-
+;;
+;; Copyright (C) 2025 Jean-François Arbour
+;;
+;; Author: Jean-François Arbour <jf.arbour@gmail.com>
+;; Maintainer: Jean-François Arbour <jf.arbour@gmail.com>
+;; Created: July 26, 2025
+;; Modified: July 26, 2025
+;; Version: 0.0.1
+;; Keywords: convenience extensions hypermedia lisp local matching outlines processes tools
+;; Homepage: https://github.com/jfa/ecp
+;; Package-Requires: ((emacs "29.1"))
+;;
+;; This file is not part of GNU Emacs.
+;;
+;;; Commentary:
+;;
+;;  Extract context events from emacs
+;;
+;;; Code:
+
+(require 'json)
+(require 'url)
+(require 'project)
+
+(defgroup ecp nil
+  "Extract context events from Emacs."
+  :group 'convenience
+  :prefix "ecp-")
+
+(defcustom ecp-publish-url nil
+  "URL endpoint to publish interactive command events.
+If nil, publishing is disabled."
+  :type '(choice (const :tag "Disabled" nil)
+                 (string :tag "URL"))
+  :group 'ecp)
+
+(defcustom ecp-publish-timeout 5
+  "Timeout in seconds for HTTP requests."
+  :type 'integer
+  :group 'ecp)
+
+(defcustom ecp-excluded-commands
+  '(self-insert-command
+    delete-backward-char
+    forward-char
+    backward-char
+    next-line
+    previous-line
+    mouse-set-point
+    handle-switch-frame
+    mwheel-scroll)
+  "List of commands to exclude from publishing."
+  :type '(repeat symbol)
+  :group 'ecp)
+
+(defvar ecp--enabled nil
+  "Whether command publishing is enabled.")
+
+(defvar ecp--session-id nil
+  "Unique session identifier for this Emacs instance.")
+
+(defun ecp--generate-session-id ()
+  "Generate a unique session identifier."
+  (format "%s-%d-%d"
+          (system-name)
+          (emacs-pid)
+          (floor (float-time))))
+
+(defun ecp--should-publish-command-p (command)
+  "Return non-nil if COMMAND should be published."
+  (and ecp--enabled
+       ecp-publish-url
+       (not (memq command ecp-excluded-commands))))
+
+(defun ecp--collect-buffer-info ()
+  "Collect current buffer information."
+  (list :buffer-name (buffer-name)
+        :buffer-file-name (buffer-file-name)
+        :major-mode major-mode))
+
+(defun ecp--create-event-payload (command)
+  "Create event payload for COMMAND."
+  (let ((base-payload (list :timestamp (format-time-string "%Y-%m-%dT%H:%M:%S.%3NZ" nil t)
+                            :session-id ecp--session-id
+                            :command (symbol-name command)
+                            :buffer-info (ecp--collect-buffer-info)
+                            :project (if-let ((current (project-current)))
+                                       (project-name current)))))
+    base-payload))
+
+(defun ecp--publish-event-async (payload)
+  "Publish event PAYLOAD asynchronously."
+  (let ((url-request-method "POST")
+        (url-request-extra-headers '(("Content-Type" . "application/json")))
+        (url-request-data (encode-coding-string (json-encode payload) 'utf-8)))
+    (url-retrieve ecp-publish-url
+                  (lambda (status)
+                    (when (plist-get status :error)
+                      (message "ECP: Failed to publish event: %s"
+                               (plist-get status :error))))
+                  nil
+                  nil
+                  ecp-publish-timeout)))
+
+(defun ecp--command-hook ()
+  "Hook function to capture and publish interactive commands."
+  (when (and (ecp--should-publish-command-p this-command)
+             (called-interactively-p 'interactive))
+    (let ((payload (ecp--create-event-payload this-command)))
+      (ecp--publish-event-async payload))))
+
+;;;###autoload
+(defun ecp-enable ()
+  "Enable interactive command publishing."
+  (interactive)
+  (unless ecp--session-id
+    (setq ecp--session-id (ecp--generate-session-id)))
+  (setq ecp--enabled t)
+  (add-hook 'post-command-hook #'ecp--command-hook)
+  (message "ECP: Command publishing enabled (session: %s)" ecp--session-id))
+
+;;;###autoload
+(defun ecp-disable ()
+  "Disable interactive command publishing."
+  (interactive)
+  (setq ecp--enabled nil)
+  (remove-hook 'post-command-hook #'ecp--command-hook)
+  (message "ECP: Command publishing disabled"))
+
+;;;###autoload
+(defun ecp-toggle ()
+  "Toggle interactive command publishing."
+  (interactive)
+  (if ecp--enabled
+      (ecp-disable)
+    (ecp-enable)))
+
+;;;###autoload
+(defun ecp-status ()
+  "Show current ECP status."
+  (interactive)
+  (message "ECP: %s (URL: %s, Session: %s)"
+           (if ecp--enabled "Enabled" "Disabled")
+           (or ecp-publish-url "Not configured")
+           (or ecp--session-id "None")))
+
+;;;###autoload
+(defun ecp-set-url (url)
+  "Set the publishing URL to URL."
+  (interactive "sPublish URL: ")
+  (setq ecp-publish-url (if (string-empty-p url) nil url))
+  (message "ECP: Publish URL set to %s" (or ecp-publish-url "disabled")))
+
+(provide 'ecp)
+;;; ecp.el ends here

@@ -4,6 +4,7 @@ services for context tracking and analysis.
 
 ## Features
 - Captures interactive commands that modify context (buffer, buffer-file-name, project, major-mode)
+- Captures non-ignored commands after a configurable period of inactivity
 - Asynchronous HTTP publishing to configurable endpoints
 - Session tracking with unique identifiers
 - Configurable command exclusion list

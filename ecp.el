@@ -63,19 +63,18 @@ If nil, publishing is disabled."
 (defvar ecp--last-context nil
   "Last recorded context state.")
 
+(defvar ecp--last-command-time 0
+  "Timestamp of the last executed command.")
+
+(defvar ecp--command-burst-threshold 5
+  "Seconds of inactivity to consider next command significant.")
+
 (defun ecp--generate-session-id ()
   "Generate a unique session identifier."
   (format "%s-%d-%d"
           (system-name)
           (emacs-pid)
           (floor (float-time))))
-
-(defun ecp--should-publish-command-p (command)
-  "Return non-nil if COMMAND should be published."
-  (and ecp--enabled
-       ecp-publish-url
-       (not (memq command ecp-excluded-commands))
-       (ecp--context-changed-p)))
 
 (defun ecp--get-current-context ()
   "Get current meaningful context."
@@ -90,6 +89,22 @@ If nil, publishing is disabled."
   (let ((current (ecp--get-current-context)))
     (prog1 (not (equal current ecp--last-context))
       (setq ecp--last-context current))))
+
+(defun ecp--is-significant-activity-p ()
+  "Return non-nil if the current command represents significant activity.
+This is determined by checking if the time since the last command
+exceeds `ecp--command-burst-threshold'."
+  (let ((now (float-time)))
+    (prog1 (> (- now ecp--last-command-time) ecp--command-burst-threshold)
+      (setq ecp--last-command-time now))))
+
+(defun ecp--should-publish-command-p (command)
+  "Return non-nil if COMMAND should be published."
+  (and ecp--enabled
+       ecp-publish-url
+       (not (memq command ecp-excluded-commands))
+       (or (ecp--context-changed-p)
+           (ecp--is-significant-activity-p))))
 
 (defun ecp--create-event-payload (command)
   "Create event payload for COMMAND."

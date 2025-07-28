@@ -66,13 +66,12 @@ If nil, publishing is disabled."
 (defvar ecp--last-command-time 0
   "Timestamp of the last executed command.")
 
-(defvar ecp--command-burst-threshold 5
+(defvar ecp--command-burst-threshold 600
   "Seconds of inactivity to consider next command significant.")
 
 (defun ecp--generate-session-id ()
   "Generate a unique session identifier."
   (format "%s-%d-%d"
-          (system-name)
           (emacs-pid)
           (floor (float-time))))
 
@@ -109,6 +108,7 @@ exceeds `ecp--command-burst-threshold'."
 (defun ecp--create-event-payload (command)
   "Create event payload for COMMAND."
   (let ((base-payload (list :timestamp (format-time-string "%Y-%m-%dT%H:%M:%S.%3NZ" nil t)
+                            :host (system-name)
                             :session_id ecp--session-id
                             :command (symbol-name command)
                             :context ecp--last-context)))

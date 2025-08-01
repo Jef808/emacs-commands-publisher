@@ -40,6 +40,26 @@ If nil, publishing is disabled."
   :type 'integer
   :group 'ecp)
 
+(defcustom ecp-enable-logging nil
+  "Whether to log published events to a buffer.
+When non-nil, events are logged to the *ECP Log* buffer."
+  :type 'boolean
+  :group 'ecp)
+
+(defcustom ecp-log-buffer-name "*ECP Log*"
+  "Name of the buffer used for logging events."
+  :type 'string
+  :group 'ecp)
+
+(defcustom ecp-log-max-entries 1000
+  "Maximum number of log entries to keep in the log buffer.
+When exceeded, older entries are removed."
+  :type 'integer
+  :group 'ecp)
+
+(defvar ecp--log-entry-count 0
+  "Current number of entries in the log buffer.")
+
 (defcustom ecp-excluded-commands
   '(self-insert-command
     delete-backward-char
@@ -71,9 +91,59 @@ If nil, publishing is disabled."
 
 (defun ecp--generate-session-id ()
   "Generate a unique session identifier."
-  (format "%s-%d-%d"
+  (format "%d-%d"
           (emacs-pid)
           (floor (float-time))))
+
+(defun ecp--get-log-buffer ()
+  "Get or create the ECP log buffer."
+  (let ((buffer (get-buffer-create ecp-log-buffer-name)))
+    (with-current-buffer buffer
+      (unless (eq major-mode 'ecp-log-mode)
+        (ecp-log-mode)))
+    buffer))
+
+(defun ecp--log-event (payload)
+  "Log event PAYLOAD to the log buffer."
+  (when ecp-enable-logging
+    (let ((buffer (ecp--get-log-buffer))
+          (timestamp (plist-get payload :timestamp))
+          (command (plist-get payload :command))
+          (context (plist-get payload :context)))
+      (with-current-buffer buffer
+        (let ((inhibit-read-only t))
+          (goto-char (point-max))
+          (insert (format "[%s] %s\n" timestamp command))
+          (when context
+            (insert (format "  Context: %s\n"
+                            (mapconcat (lambda (kv)
+                                         (format "%s=%s"
+                                                 (substring (symbol-name (car kv)) 1)
+                                                 (cadr kv)))
+                                       (seq-partition context 2)
+                                       " "))))
+          (insert "\n")
+          (setq ecp--log-entry-count (1+ ecp--log-entry-count))
+
+          ;; Trim log if it exceeds maximum entries
+          (when (> ecp--log-entry-count ecp-log-max-entries)
+            (ecp--trim-log-buffer)))))))
+
+(defun ecp--trim-log-buffer ()
+  "Remove oldest entries from log buffer to stay within limits."
+  (with-current-buffer (ecp--get-log-buffer)
+    (let ((inhibit-read-only t)
+          (entries-to-remove (/ ecp-log-max-entries 10)))
+      (goto-char (point-min))
+      (dotimes (_ entries-to-remove)
+        (when (re-search-forward "^\\[.*?\\].*?\n\\(?:  Context:.*?\n\\)?\n" nil t)
+          (delete-region (match-beginning 0) (match-end 0))
+          (setq ecp--log-entry-count (1- ecp--log-entry-count)))))))
+
+(define-derived-mode ecp-log-mode special-mode "ECP-Log"
+  "Major mode for ECP event log buffer."
+  (setq buffer-read-only t)
+  (setq truncate-lines nil))
 
 (defun ecp--get-current-context ()
   "Get current meaningful context."
@@ -116,6 +186,7 @@ exceeds `ecp--command-burst-threshold'."
 
 (defun ecp--publish-event-async (payload)
   "Publish event PAYLOAD asynchronously."
+  (ecp--log-event payload)
   (let ((url-request-method "POST")
         (url-request-extra-headers '(("Content-Type" . "application/json")))
         (url-request-data (encode-coding-string (json-encode payload) 'utf-8)))
@@ -160,13 +231,41 @@ exceeds `ecp--command-burst-threshold'."
     (ecp-enable)))
 
 ;;;###autoload
+(defun ecp-toggle-logging ()
+  "Toggle event logging on/off."
+  (interactive)
+  (setq ecp-enable-logging (not ecp-enable-logging))
+  (message "ECP: Logging %s" (if ecp-enable-logging "enabled" "disabled")))
+
+;;;###autoload
+(defun ecp-show-log ()
+  "Display the ECP event log buffer."
+  (interactive)
+  (let ((buffer (ecp--get-log-buffer)))
+    (display-buffer buffer)
+    (with-current-buffer buffer
+      (goto-char (point-max)))))
+
+;;;###autoload
+(defun ecp-clear-log ()
+  "Clear the ECP event log buffer."
+  (interactive)
+  (when (get-buffer ecp-log-buffer-name)
+    (with-current-buffer ecp-log-buffer-name
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (setq ecp--log-entry-count 0))))
+  (message "ECP: Log cleared"))
+
+;;;###autoload
 (defun ecp-status ()
   "Show current ECP status."
   (interactive)
-  (message "ECP: %s (URL: %s, Session: %s)"
+  (message "ECP: %s (URL: %s, Session: %s, Logging: %s)"
            (if ecp--enabled "Enabled" "Disabled")
            (or ecp-publish-url "Not configured")
-           (or ecp--session-id "None")))
+           (or ecp--session-id "None")
+           (if ecp-enable-logging "On" "Off")))
 
 ;;;###autoload
 (defun ecp-set-url (url)
